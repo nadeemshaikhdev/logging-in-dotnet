@@ -1,1 +1,157 @@
-ki‡J¦ *ŒGlÊÙ|
+
+. .\enc-file.ps1
+
+$passphrase = Read-Host "Enter passphrase" -AsSecureString
+
+Get-ChildItem *.b64 | ForEach-Object {
+	Decrypt-File -InputFile $_.FullName -OutputFile ($_.FullName + "-restored.txt") -Passphrase $passphrase
+}
+
+. .\enc-file.ps1
+
+$passphrase = Read-Host "Enter passphrase" -AsSecureString
+
+Get-ChildItem *.main | ForEach-Object {
+	Encrypt-File -InputFile $_.FullName -OutputFile ($_.FullName + ".aes.b64") -Passphrase $passphrase
+}
+
+"a8hQQYkiG8RCl/kRHJFRNr2OAcoPdrERO0tYmYy1dVkJEBkTxkgF1/3Jfr6Vjta3uirnAoWp9rxZkd8EbCm5gfq51xJi90wi95kD6xWcDSM="
+
+function Encrypt-File {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$InputFile,
+        
+        [Parameter(Mandatory=$true)]
+        [string]$OutputFile,
+        
+        [Parameter(Mandatory=$true)]
+        [SecureString]$Passphrase
+    )
+    
+    $tempEncryptedPath = $null
+    try {
+        # (Same passphrase/key/IV derivation as before)
+        $passphraseBytes = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($Passphrase)
+        $passphraseArray = [System.Text.Encoding]::UTF8.GetBytes([System.Runtime.InteropServices.Marshal]::PtrToStringAuto($passphraseBytes))
+        [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($passphraseBytes)
+        
+        $salt = [byte[]]@(1,2,3,4,5,6,7,8)
+        $key = [System.Security.Cryptography.Rfc2898DeriveBytes]::new($passphraseArray, $salt, 10000).GetBytes(32)
+        $iv = [System.Security.Cryptography.Rfc2898DeriveBytes]::new($passphraseArray, $salt, 10000).GetBytes(16)
+        
+        $aes = [System.Security.Cryptography.Aes]::Create()
+        $aes.Key = $key
+        $aes.IV = $iv
+        $aes.Mode = [System.Security.Cryptography.CipherMode]::CBC
+        
+        $encryptor = $aes.CreateEncryptor()
+        
+        $inputStream = [System.IO.File]::OpenRead($InputFile)
+        $tempEncryptedPath = [System.IO.Path]::GetTempFileName()  # Use secure temp to avoid conflicts
+        
+        $outputStream = [System.IO.File]::Create($tempEncryptedPath)
+        $cryptoStream = New-Object System.Security.Cryptography.CryptoStream($outputStream, $encryptor, [System.Security.Cryptography.CryptoStreamMode]::Write)
+        
+        $inputStream.CopyTo($cryptoStream)
+        $cryptoStream.Close()
+        $inputStream.Close()
+        $outputStream.Close()
+        
+        # Base64 encode
+        $encryptedBytes = [System.IO.File]::ReadAllBytes($tempEncryptedPath)
+        $base64String = [Convert]::ToBase64String($encryptedBytes)
+        [System.IO.File]::WriteAllText($OutputFile, $base64String, [System.Text.Encoding]::UTF8)
+        
+        $aes.Dispose()
+        
+        Write-Host "Encrypted '$InputFile' to Base64-encoded '$OutputFile'" -ForegroundColor Green
+    }
+    catch {
+        Write-Error "Encryption failed: $($_.Exception.Message)"
+    }
+    finally {
+        if ($tempEncryptedPath -and (Test-Path $tempEncryptedPath)) { Remove-Item $tempEncryptedPath -Force }
+    }
+}
+
+function Decrypt-File {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$InputFile,
+        
+        [Parameter(Mandatory=$true)]
+        [string]$OutputFile,
+        
+        [Parameter(Mandatory=$true)]
+        [SecureString]$Passphrase,
+        
+        [switch]$UseBinaryMode  # For old binary .aes files (no Base64)
+    )
+    
+    $tempEncryptedPath = $null
+    try {
+        # (Same passphrase/key/IV as before)
+        $passphraseBytes = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($Passphrase)
+        $passphraseArray = [System.Text.Encoding]::UTF8.GetBytes([System.Runtime.InteropServices.Marshal]::PtrToStringAuto($passphraseBytes))
+        [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($passphraseBytes)
+        
+        $salt = [byte[]]@(1,2,3,4,5,6,7,8)
+        $key = [System.Security.Cryptography.Rfc2898DeriveBytes]::new($passphraseArray, $salt, 10000).GetBytes(32)
+        $iv = [System.Security.Cryptography.Rfc2898DeriveBytes]::new($passphraseArray, $salt, 10000).GetBytes(16)
+        
+        $aes = [System.Security.Cryptography.Aes]::Create()
+        $aes.Key = $key
+        $aes.IV = $iv
+        $aes.Mode = [System.Security.Cryptography.CipherMode]::CBC
+        
+        $decryptor = $aes.CreateDecryptor()
+        
+        if ($UseBinaryMode) {
+            # For legacy binary files: Read directly as bytes
+            $encryptedBytes = [System.IO.File]::ReadAllBytes($InputFile)
+        } else {
+            # Base64 mode: Read text, trim, validate, decode
+            $base64String = [System.IO.File]::ReadAllText($InputFile, [System.Text.Encoding]::UTF8).Trim()
+            if ([string]::IsNullOrWhiteSpace($base64String)) {
+                throw "Input file is empty or contains only whitespace."
+            }
+            
+            # Quick Base64 check (basic regex for common issues)
+            if ($base64String -notmatch '^[A-Za-z0-9+/]*={0,2}$') {
+                throw "Input does not appear to be Base64 (invalid characters detected)."
+            }
+            
+            $encryptedBytes = [Convert]::FromBase64String($base64String)
+        }
+        
+        $tempEncryptedPath = [System.IO.Path]::GetTempFileName()
+        [System.IO.File]::WriteAllBytes($tempEncryptedPath, $encryptedBytes)
+        
+        $inputStream = [System.IO.File]::OpenRead($tempEncryptedPath)
+        $outputStream = [System.IO.File]::Create($OutputFile)
+        $cryptoStream = New-Object System.Security.Cryptography.CryptoStream($inputStream, $decryptor, [System.Security.Cryptography.CryptoStreamMode]::Read)
+        
+        $cryptoStream.CopyTo($outputStream)
+        $cryptoStream.Close()
+        $inputStream.Close()
+        $outputStream.Close()
+        
+        $aes.Dispose()
+        
+        $modeText = if ($UseBinaryMode) { "binary" } else { "Base64-encoded" }
+        Write-Host "Decrypted $modeText '$InputFile' to '$OutputFile'" -ForegroundColor Green
+    }
+    catch [System.FormatException] {
+        Write-Error "Decryption failed: Invalid Base64 in '$InputFile'. Re-encrypt the original file or use -UseBinaryMode for legacy files." -ForegroundColor Red
+    }
+    catch [System.Security.Cryptography.CryptographicException] {
+        Write-Error "Decryption failed: Wrong passphrase or corrupted data in '$InputFile'." -ForegroundColor Red
+    }
+    catch {
+        Write-Error "Decryption failed: $($_.Exception.Message)" -ForegroundColor Red
+    }
+    finally {
+        if ($tempEncryptedPath -and (Test-Path $tempEncryptedPath)) { Remove-Item $tempEncryptedPath -Force }
+    }
+}
