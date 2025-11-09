@@ -16,6 +16,7 @@ function Encrypt-File {
     [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($passphraseBytes)
     
     # Derive key and IV from passphrase (use PBKDF2 for security)
+	$salt = [byte[]]@(1,2,3,4,5,6,7,8,9)
     $key = [System.Security.Cryptography.Rfc2898DeriveBytes]::new($passphraseArray, [byte[]]@(1,2,3,4,5,6,7,8), 10000).GetBytes(32)  # 256-bit key
     $iv = [System.Security.Cryptography.Rfc2898DeriveBytes]::new($passphraseArray, [byte[]]@(1,2,3,4,5,6,7,8), 10000).GetBytes(16)  # 128-bit IV
     
@@ -25,20 +26,18 @@ function Encrypt-File {
     
     $encryptor = $aes.CreateEncryptor()
     $fileStream = [System.IO.File]::OpenRead($InputFile)
-    $cryptoStream = New-Object System.Security.Cryptography.CryptoStream($fileStream, $encryptor, ([System.Security.Cryptography.CryptoStreamMode]::Write))
     $outputStream = [System.IO.File]::Create($OutputFile)
+    $cryptoStream = New-Object System.Security.Cryptography.CryptoStream($outputStream, $encryptor, ([System.Security.Cryptography.CryptoStreamMode]::Write))
     
-    $cryptoStream.CopyTo($outputStream)
-    $outputStream.Close()
+    $fileStream.CopyTo($cryptoStream)
+	
     $cryptoStream.Close()
     $fileStream.Close()
+    $outputStream.Close()
     
     Write-Host "Encrypted '$InputFile' to '$OutputFile'"
 }
 
-# Usage example:
-$pass = Read-Host "Enter passphrase" -AsSecureString
-Encrypt-File -InputFile "yourfile.txt" -OutputFile "yourfile.txt.aes" -Passphrase $pass
 
 function Decrypt-File {
     param(
@@ -76,7 +75,32 @@ function Decrypt-File {
     
     Write-Host "Decrypted '$InputFile' to '$OutputFile'"
 }
+. .\enc-file.ps1
 
-# Usage:
-$pass = Read-Host "Enter passphrase" -AsSecureString
-Decrypt-File -InputFile "yourfile.txt.aes" -OutputFile "yourfile.txt" -Passphrase $pass
+. .\dec-file.ps1
+
+$passphrase = Read-Host "Enter passphrase" -AsSecureString
+
+Get-ChildItem *.txt | ForEach-Object {
+	Encrypt-File -InputFile $_.FullName -OutputFile ($_.FullName + ".aes") -Passphrase $passphrase
+}
+
+
+
+. .\enc-file.ps1
+
+. .\dec-file.ps1
+
+$passphrase = Read-Host "Enter passphrase" -AsSecureString
+
+Get-ChildItem *.aes | ForEach-Object {
+	Decrypt-File -InputFile $_.FullName -OutputFile ($_.FullName + ".dec.txt") -Passphrase $passphrase
+}
+
+
+
+
+
+
+
+
