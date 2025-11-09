@@ -1,1 +1,82 @@
-test
+function Encrypt-File {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$InputFile,
+        
+        [Parameter(Mandatory=$true)]
+        [string]$OutputFile,
+        
+        [Parameter(Mandatory=$true)]
+        [SecureString]$Passphrase
+    )
+    
+    # Convert passphrase to byte array
+    $passphraseBytes = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($Passphrase)
+    $passphraseArray = [System.Text.Encoding]::UTF8.GetBytes([System.Runtime.InteropServices.Marshal]::PtrToStringAuto($passphraseBytes))
+    [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($passphraseBytes)
+    
+    # Derive key and IV from passphrase (use PBKDF2 for security)
+    $key = [System.Security.Cryptography.Rfc2898DeriveBytes]::new($passphraseArray, [byte[]]@(1,2,3,4,5,6,7,8), 10000).GetBytes(32)  # 256-bit key
+    $iv = [System.Security.Cryptography.Rfc2898DeriveBytes]::new($passphraseArray, [byte[]]@(1,2,3,4,5,6,7,8), 10000).GetBytes(16)  # 128-bit IV
+    
+    $aes = [System.Security.Cryptography.Aes]::Create()
+    $aes.Key = $key
+    $aes.IV = $iv
+    
+    $encryptor = $aes.CreateEncryptor()
+    $fileStream = [System.IO.File]::OpenRead($InputFile)
+    $cryptoStream = New-Object System.Security.Cryptography.CryptoStream($fileStream, $encryptor, ([System.Security.Cryptography.CryptoStreamMode]::Write))
+    $outputStream = [System.IO.File]::Create($OutputFile)
+    
+    $cryptoStream.CopyTo($outputStream)
+    $outputStream.Close()
+    $cryptoStream.Close()
+    $fileStream.Close()
+    
+    Write-Host "Encrypted '$InputFile' to '$OutputFile'"
+}
+
+# Usage example:
+$pass = Read-Host "Enter passphrase" -AsSecureString
+Encrypt-File -InputFile "yourfile.txt" -OutputFile "yourfile.txt.aes" -Passphrase $pass
+
+function Decrypt-File {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$InputFile,
+        
+        [Parameter(Mandatory=$true)]
+        [string]$OutputFile,
+        
+        [Parameter(Mandatory=$true)]
+        [SecureString]$Passphrase
+    )
+    
+    # Same key/IV derivation as above
+    $passphraseBytes = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($Passphrase)
+    $passphraseArray = [System.Text.Encoding]::UTF8.GetBytes([System.Runtime.InteropServices.Marshal]::PtrToStringAuto($passphraseBytes))
+    [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($passphraseBytes)
+    
+    $key = [System.Security.Cryptography.Rfc2898DeriveBytes]::new($passphraseArray, [byte[]]@(1,2,3,4,5,6,7,8), 10000).GetBytes(32)
+    $iv = [System.Security.Cryptography.Rfc2898DeriveBytes]::new($passphraseArray, [byte[]]@(1,2,3,4,5,6,7,8), 10000).GetBytes(16)
+    
+    $aes = [System.Security.Cryptography.Aes]::Create()
+    $aes.Key = $key
+    $aes.IV = $iv
+    
+    $decryptor = $aes.CreateDecryptor()
+    $fileStream = [System.IO.File]::OpenRead($InputFile)
+    $cryptoStream = New-Object System.Security.Cryptography.CryptoStream($fileStream, $decryptor, ([System.Security.Cryptography.CryptoStreamMode]::Read))
+    $outputStream = [System.IO.File]::Create($OutputFile)
+    
+    $cryptoStream.CopyTo($outputStream)
+    $outputStream.Close()
+    $cryptoStream.Close()
+    $fileStream.Close()
+    
+    Write-Host "Decrypted '$InputFile' to '$OutputFile'"
+}
+
+# Usage:
+$pass = Read-Host "Enter passphrase" -AsSecureString
+Decrypt-File -InputFile "yourfile.txt.aes" -OutputFile "yourfile.txt" -Passphrase $pass
